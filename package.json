@@ -1,0 +1,26 @@
+{
+  "name": "ralf-mocap-mediapipe",
+  "version": "0.1.0",
+  "description": "Motion capture CLI using MediaPipe Pose and OSC",
+  "type": "module",
+  "bin": {
+    "ralf-mocap-mp": "./bin/ralf-mocap.js"
+  },
+  "scripts": {
+    "start": "node bin/ralf-mocap.js start",
+    "dev": "nodemon bin/ralf-mocap.js start",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "express": "^4.21.2",
+    "open": "^10.1.0",
+    "osc-min": "^1.1.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9",
+    "vitest": "^2.1.9"
+  }
+}
