@@ -27,11 +27,6 @@ export function createApp(options = {}) {
   const publicPath = path.join(__dirname, "../public");
   app.use(express.static(publicPath));
 
-  // Redirect root to combined view
-  app.get("/", (req, res) => {
-    res.redirect("/combined.html");
-  });
-
   // Create OSC sender with mode config
   const sendOsc = createOscSender(oscPort, "localhost", { debug, enabledKeypoints });
 
