@@ -52,10 +52,50 @@ const SKELETON_EDGES = [
 
 // DOM elements - Video
 const video = document.getElementById("video");
+const videoPanel = document.querySelector(".video-panel");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const statusEl = document.getElementById("status");
 const fpsEl = document.getElementById("fps");
+
+// Calculate where the video actually displays (accounting for object-fit: contain)
+function updateCanvasPosition() {
+  const containerWidth = videoPanel.clientWidth;
+  const containerHeight = videoPanel.clientHeight;
+  const videoWidth = video.videoWidth;
+  const videoHeight = video.videoHeight;
+
+  if (!videoWidth || !videoHeight) return;
+
+  // Calculate the displayed video dimensions (object-fit: contain)
+  const containerRatio = containerWidth / containerHeight;
+  const videoRatio = videoWidth / videoHeight;
+
+  let displayWidth, displayHeight, offsetX, offsetY;
+
+  if (containerRatio > videoRatio) {
+    // Container is wider than video - video is height-constrained
+    displayHeight = containerHeight;
+    displayWidth = displayHeight * videoRatio;
+    offsetX = (containerWidth - displayWidth) / 2;
+    offsetY = 0;
+  } else {
+    // Container is taller than video - video is width-constrained
+    displayWidth = containerWidth;
+    displayHeight = displayWidth / videoRatio;
+    offsetX = 0;
+    offsetY = (containerHeight - displayHeight) / 2;
+  }
+
+  // Position and size the canvas to match the displayed video
+  canvas.style.left = `${offsetX}px`;
+  canvas.style.top = `${offsetY}px`;
+  canvas.style.width = `${displayWidth}px`;
+  canvas.style.height = `${displayHeight}px`;
+}
+
+// Update canvas position on resize
+window.addEventListener("resize", updateCanvasPosition);
 
 // DOM elements - Monitor
 const connectionStatus = document.getElementById("connection-status");
@@ -306,9 +346,12 @@ async function init() {
       video.onloadedmetadata = resolve;
     });
 
-    // Set canvas size to match video
+    // Set canvas size to match video resolution
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+
+    // Position canvas to match displayed video area
+    updateCanvasPosition();
 
     console.log(`Video: ${video.videoWidth}x${video.videoHeight}`);
     setStatus("Ready", "connected");
