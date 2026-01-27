@@ -18,7 +18,7 @@ program
   .option("--http-port <port>", "HTTP server port", "3000")
   .option("--no-open", "Don't auto-open browser")
   .option("-d, --debug", "Log OSC messages to console")
-  .option("-u, --upper-body", "Use upper body mode (13 keypoints, 26 floats)")
+  .option("-u, --upper-body", "Use upper body mode (7 keypoints, 14 floats)")
   .option("-c, --core", "Use core mode (13 keypoints, 26 floats) - no face/hand/foot detail")
   .action(async (options) => {
     const oscPort = parseInt(options.port, 10);
