@@ -195,7 +195,8 @@ function drawSkeletonPreview(landmarks) {
   const offsetX = (w - rangeX * scale) / 2 - minX * scale;
   const offsetY = (h - rangeY * scale) / 2 - minY * scale;
 
-  const mapX = x => x * scale + offsetX;
+  // Mirror horizontally so it matches the user's perspective (like a mirror)
+  const mapX = x => w - (x * scale + offsetX);
   const mapY = y => y * scale + offsetY;
 
   // Draw edges
