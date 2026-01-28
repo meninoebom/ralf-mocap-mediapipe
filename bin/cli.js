@@ -7,7 +7,7 @@ import { createApp } from "../src/server/index.js";
 const program = new Command();
 
 program
-  .name("ralf-mocap-mp")
+  .name("mocap")
   .description("Motion capture CLI using MediaPipe Pose and OSC")
   .version("0.1.0");
 
@@ -76,7 +76,7 @@ program
 
 // Default to start if no command given
 if (process.argv.length === 2) {
-  program.parse(["node", "ralf-mocap-mp", "start"]);
+  program.parse(["node", "mocap", "start"]);
 } else {
   program.parse();
 }
