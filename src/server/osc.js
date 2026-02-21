@@ -86,9 +86,14 @@ export const KEYPOINT_ORDER = KEYPOINT_NAMES;
  * Wekinator expects /wek/inputs with floats.
  * MediaPipe gives normalized 0-1 coordinates, which is ideal for ML.
  *
+ * Default format: 99 floats (33 joints × [y, x, visibility])
+ * Legacy format:  66 floats (33 joints × [y, x]) — for Wekinator compat
+ *
  * @param {Object} pose - Pose object with landmarks array
  * @param {Object} options - Options
  * @param {Set<string>} options.enabledKeypoints - Set of keypoint names to include
+ * @param {boolean} options.legacyMode - Omit visibility (66-float format)
+ * @param {string} options.address - OSC address (default "/wek/inputs")
  * @returns {{ address: string, args: Array<{type: string, value: number}> }}
  */
 export function buildOscMessage(pose, options = {}) {
@@ -96,10 +101,14 @@ export function buildOscMessage(pose, options = {}) {
     return null;
   }
 
-  const { enabledKeypoints = new Set(KEYPOINT_NAMES) } = options;
+  const {
+    enabledKeypoints = new Set(KEYPOINT_NAMES),
+    legacyMode = false,
+    address = "/wek/inputs",
+  } = options;
   const landmarks = pose.landmarks;
 
-  // Build args array: y before x for each enabled keypoint, in canonical order
+  // Build args array: y, x[, visibility] for each enabled keypoint, in canonical order
   const args = [];
   for (let i = 0; i < KEYPOINT_NAMES.length; i++) {
     const name = KEYPOINT_NAMES[i];
@@ -110,16 +119,19 @@ export function buildOscMessage(pose, options = {}) {
       // MediaPipe gives normalized 0-1 coordinates
       args.push({ type: "float", value: lm.y });
       args.push({ type: "float", value: lm.x });
+      if (!legacyMode) {
+        args.push({ type: "float", value: lm.visibility ?? 0 });
+      }
     } else {
       args.push({ type: "float", value: 0 });
       args.push({ type: "float", value: 0 });
+      if (!legacyMode) {
+        args.push({ type: "float", value: 0 });
+      }
     }
   }
 
-  return {
-    address: "/wek/inputs",
-    args,
-  };
+  return { address, args };
 }
 
 /**
@@ -137,18 +149,40 @@ export function formatOscDebug(message, port, host) {
  * Create a function that sends OSC messages to a UDP port.
  */
 export function createOscSender(port = 6448, host = "localhost", options = {}) {
-  const { debug = false, enabledKeypoints } = options;
+  const {
+    debug = false,
+    enabledKeypoints,
+    legacyMode = process.env.RALF_LEGACY_MODE === "1",
+    poseAddress = process.env.RALF_POSE_ADDRESS,
+  } = options;
   const udp = dgram.createSocket("udp4");
 
   return function send(pose) {
-    const message = buildOscMessage(pose, { enabledKeypoints });
-    if (!message) return;
+    // Always send /wek/inputs (legacy format when RALF_LEGACY_MODE=1)
+    const wekMessage = buildOscMessage(pose, {
+      enabledKeypoints,
+      legacyMode,
+    });
+    if (!wekMessage) return;
 
     if (debug) {
-      console.log(formatOscDebug(message, port, host));
+      console.log(formatOscDebug(wekMessage, port, host));
     }
 
-    const buffer = osc.toBuffer(message);
+    const buffer = osc.toBuffer(wekMessage);
     udp.send(buffer, 0, buffer.length, port, host);
+
+    // Optionally also send on a custom address (e.g. /ralf/pose)
+    if (poseAddress) {
+      const poseMessage = buildOscMessage(pose, {
+        enabledKeypoints,
+        legacyMode: false,
+        address: poseAddress,
+      });
+      if (poseMessage) {
+        const poseBuf = osc.toBuffer(poseMessage);
+        udp.send(poseBuf, 0, poseBuf.length, port, host);
+      }
+    }
   };
 }
