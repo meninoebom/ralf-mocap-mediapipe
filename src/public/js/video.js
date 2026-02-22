@@ -5,6 +5,77 @@ import { PoseLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdel
 
 const SCORE_THRESHOLD = 0.5;
 
+// --- One Euro Filter (same as app.js) ---
+class LowPassFilter {
+  constructor() { this.y = null; this.s = null; }
+  filter(value, alpha) {
+    if (this.y === null) { this.s = value; }
+    else { this.s = alpha * value + (1 - alpha) * this.s; }
+    this.y = value;
+    return this.s;
+  }
+}
+
+class OneEuroFilter {
+  constructor(minCutoff = 1.0, beta = 0.007, dCutoff = 1.0) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.xFilter = new LowPassFilter();
+    this.dxFilter = new LowPassFilter();
+    this.lastTime = null;
+  }
+  alpha(cutoff, dt) {
+    const tau = 1.0 / (2 * Math.PI * cutoff);
+    return 1.0 / (1.0 + tau / dt);
+  }
+  filter(value, timestamp) {
+    if (this.lastTime === null) {
+      this.lastTime = timestamp;
+      return this.xFilter.filter(value, 1.0);
+    }
+    const dt = Math.max(timestamp - this.lastTime, 1e-6);
+    this.lastTime = timestamp;
+    const dValue = (value - (this.xFilter.s ?? value)) / dt;
+    const edValue = this.dxFilter.filter(dValue, this.alpha(this.dCutoff, dt));
+    const cutoff = this.minCutoff + this.beta * Math.abs(edValue);
+    return this.xFilter.filter(value, this.alpha(cutoff, dt));
+  }
+}
+
+const landmarkFilters = Array.from({ length: 33 }, () => ({
+  x: new OneEuroFilter(1.0, 0.007, 1.0),
+  y: new OneEuroFilter(1.0, 0.007, 1.0),
+  z: new OneEuroFilter(1.0, 0.007, 1.0),
+}));
+
+function smoothLandmarks(landmarks, timestamp) {
+  return landmarks.map((lm, i) => ({
+    x: landmarkFilters[i].x.filter(lm.x, timestamp),
+    y: landmarkFilters[i].y.filter(lm.y, timestamp),
+    z: landmarkFilters[i].z.filter(lm.z, timestamp),
+    visibility: lm.visibility,
+  }));
+}
+
+function isPlausiblePose(landmarks) {
+  const lShoulder = landmarks[11];
+  const rShoulder = landmarks[12];
+  const lHip = landmarks[23];
+  const rHip = landmarks[24];
+  const coreVisibility = Math.min(
+    lShoulder.visibility, rShoulder.visibility,
+    lHip.visibility, rHip.visibility
+  );
+  if (coreVisibility < 0.3) return false;
+  const shoulderDist = Math.hypot(lShoulder.x - rShoulder.x, lShoulder.y - rShoulder.y);
+  const hipDist = Math.hypot(lHip.x - rHip.x, lHip.y - rHip.y);
+  if (shoulderDist < 0.02 || shoulderDist > 0.5) return false;
+  const ratio = hipDist / shoulderDist;
+  if (ratio < 0.3 || ratio > 1.5) return false;
+  return true;
+}
+
 // DOM elements
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
@@ -50,6 +121,7 @@ const POSE_CONNECTIONS = [
 // Stats tracking
 let detectCount = 0;
 let lastStatsTime = Date.now();
+let lastValidLandmarks = null;
 
 // Initialize MediaPipe
 async function init() {
@@ -69,8 +141,8 @@ async function init() {
       },
       runningMode: "VIDEO",
       numPoses: 1,
-      minPoseDetectionConfidence: 0.5,
-      minPosePresenceConfidence: 0.5,
+      minPoseDetectionConfidence: 0.65,
+      minPosePresenceConfidence: 0.65,
       minTrackingConfidence: 0.5,
     });
 
@@ -105,6 +177,7 @@ async function init() {
 
 function detectPoses(poseLandmarker) {
   const startTime = performance.now();
+  const timestamp = startTime / 1000;
 
   // Run pose detection
   const results = poseLandmarker.detectForVideo(video, startTime);
@@ -113,15 +186,23 @@ function detectPoses(poseLandmarker) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (results.landmarks && results.landmarks.length > 0) {
-    const landmarks = results.landmarks[0];
+    const raw = results.landmarks[0];
 
-    // Draw skeleton
-    drawSkeleton(landmarks);
+    if (isPlausiblePose(raw)) {
+      const landmarks = smoothLandmarks(raw, timestamp);
+      lastValidLandmarks = landmarks;
 
-    // Send to server
-    socket.emit("pose", { landmarks });
+      drawSkeleton(landmarks);
+      socket.emit("pose", { landmarks });
+    } else if (lastValidLandmarks) {
+      socket.emit("pose", { landmarks: lastValidLandmarks });
+      drawSkeleton(lastValidLandmarks);
+    }
 
     detectCount++;
+  } else if (lastValidLandmarks) {
+    // Hold last good frame for stream continuity
+    socket.emit("pose", { landmarks: lastValidLandmarks });
   }
 
   // Update stats every second

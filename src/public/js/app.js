@@ -10,6 +10,94 @@ import {
 const SCORE_THRESHOLD = 0.5;
 const MAX_JUMP_THRESHOLD = 0.15; // 15% of frame dimension - outlier filter
 
+// --- One Euro Filter ---
+// Adaptive low-pass filter: smooth when still, responsive when moving fast.
+// The JS MediaPipe API doesn't include the built-in smoothing from the C++ SDK,
+// so we implement it ourselves. One filter per landmark per axis.
+class LowPassFilter {
+  constructor() { this.y = null; this.s = null; }
+  filter(value, alpha) {
+    if (this.y === null) { this.s = value; }
+    else { this.s = alpha * value + (1 - alpha) * this.s; }
+    this.y = value;
+    return this.s;
+  }
+}
+
+class OneEuroFilter {
+  constructor(minCutoff = 1.0, beta = 0.007, dCutoff = 1.0) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.xFilter = new LowPassFilter();
+    this.dxFilter = new LowPassFilter();
+    this.lastTime = null;
+  }
+
+  alpha(cutoff, dt) {
+    const tau = 1.0 / (2 * Math.PI * cutoff);
+    return 1.0 / (1.0 + tau / dt);
+  }
+
+  filter(value, timestamp) {
+    if (this.lastTime === null) {
+      this.lastTime = timestamp;
+      return this.xFilter.filter(value, 1.0);
+    }
+    const dt = Math.max(timestamp - this.lastTime, 1e-6);
+    this.lastTime = timestamp;
+
+    const dValue = (value - (this.xFilter.s ?? value)) / dt;
+    const edValue = this.dxFilter.filter(dValue, this.alpha(this.dCutoff, dt));
+    const cutoff = this.minCutoff + this.beta * Math.abs(edValue);
+    return this.xFilter.filter(value, this.alpha(cutoff, dt));
+  }
+}
+
+// One filter per landmark (33) per axis (x, y, z, visibility)
+const landmarkFilters = Array.from({ length: 33 }, () => ({
+  x: new OneEuroFilter(1.0, 0.007, 1.0),
+  y: new OneEuroFilter(1.0, 0.007, 1.0),
+  z: new OneEuroFilter(1.0, 0.007, 1.0),
+}));
+
+function smoothLandmarks(landmarks, timestamp) {
+  return landmarks.map((lm, i) => ({
+    x: landmarkFilters[i].x.filter(lm.x, timestamp),
+    y: landmarkFilters[i].y.filter(lm.y, timestamp),
+    z: landmarkFilters[i].z.filter(lm.z, timestamp),
+    visibility: lm.visibility, // pass through raw — Jester uses this as DTW weight
+  }));
+}
+
+// --- Pose Plausibility Check ---
+// Rejects hallucinated skeletons (e.g. MediaPipe tracking a chair or poster).
+// Uses anatomical ratios that hold across body sizes thanks to normalized coords.
+function isPlausiblePose(landmarks) {
+  const lShoulder = landmarks[11];
+  const rShoulder = landmarks[12];
+  const lHip = landmarks[23];
+  const rHip = landmarks[24];
+
+  // Need core landmarks to be reasonably visible
+  const coreVisibility = Math.min(
+    lShoulder.visibility, rShoulder.visibility,
+    lHip.visibility, rHip.visibility
+  );
+  if (coreVisibility < 0.3) return false;
+
+  const shoulderDist = Math.hypot(lShoulder.x - rShoulder.x, lShoulder.y - rShoulder.y);
+  const hipDist = Math.hypot(lHip.x - rHip.x, lHip.y - rHip.y);
+
+  // Shoulders too narrow (collapsed) or impossibly wide
+  if (shoulderDist < 0.02 || shoulderDist > 0.5) return false;
+  // Hip-to-shoulder ratio outside human range
+  const ratio = hipDist / shoulderDist;
+  if (ratio < 0.3 || ratio > 1.5) return false;
+
+  return true;
+}
+
 // MediaPipe landmark names
 const LANDMARK_NAMES = [
   'nose', 'left_eye_inner', 'left_eye', 'left_eye_outer',
@@ -108,6 +196,7 @@ const skeletonCtx = skeletonCanvas.getContext("2d");
 
 // State
 let prevLandmarks = null;
+let lastValidLandmarks = null; // hold-last-good for continuous stream to Jester
 let detectCount = 0;
 let lastStatsTime = Date.now();
 let messagesInLastSecond = 0;
@@ -329,8 +418,8 @@ async function init() {
       },
       runningMode: "VIDEO",
       numPoses: 1,
-      minPoseDetectionConfidence: 0.5,
-      minPosePresenceConfidence: 0.5,
+      minPoseDetectionConfidence: 0.65,
+      minPosePresenceConfidence: 0.65,
       minTrackingConfidence: 0.5,
     });
 
@@ -368,6 +457,7 @@ async function init() {
 
 function detectPoses(poseLandmarker) {
   const startTime = performance.now();
+  const timestamp = startTime / 1000; // One Euro Filter needs seconds
 
   // Run pose detection
   const results = poseLandmarker.detectForVideo(video, startTime);
@@ -376,25 +466,40 @@ function detectPoses(poseLandmarker) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   if (results.landmarks && results.landmarks.length > 0) {
-    // Apply outlier filter
-    const landmarks = filterOutliers(results.landmarks[0]);
+    // Pipeline: outlier filter → plausibility check → smooth → emit
+    const outlierFiltered = filterOutliers(results.landmarks[0]);
 
-    // Draw skeleton on video
-    drawSkeleton(landmarks);
+    if (isPlausiblePose(outlierFiltered)) {
+      const landmarks = smoothLandmarks(outlierFiltered, timestamp);
+      lastValidLandmarks = landmarks;
 
-    // Send to server
-    socket.emit("pose", { landmarks });
-    messagesInLastSecond++;
+      // Draw skeleton on video
+      drawSkeleton(landmarks);
 
-    // Throttle UI updates
-    const now = performance.now();
-    if (now - lastUIUpdate >= UI_UPDATE_INTERVAL) {
-      lastUIUpdate = now;
-      drawSkeletonPreview(landmarks);
-      updateKeypointsTable(landmarks);
+      // Send to server
+      socket.emit("pose", { landmarks });
+      messagesInLastSecond++;
+
+      // Throttle UI updates
+      const now = performance.now();
+      if (now - lastUIUpdate >= UI_UPDATE_INTERVAL) {
+        lastUIUpdate = now;
+        drawSkeletonPreview(landmarks);
+        updateKeypointsTable(landmarks);
+      }
+    } else if (lastValidLandmarks) {
+      // Implausible pose — hold last good frame for stream continuity
+      socket.emit("pose", { landmarks: lastValidLandmarks });
+      messagesInLastSecond++;
+      drawSkeleton(lastValidLandmarks);
     }
 
     detectCount++;
+  } else if (lastValidLandmarks) {
+    // No detection (confidence too low) — hold last good frame
+    // Jester Studio needs continuous frames; gaps break DTW
+    socket.emit("pose", { landmarks: lastValidLandmarks });
+    messagesInLastSecond++;
   }
 
   // Update FPS every second
