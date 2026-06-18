@@ -175,6 +175,10 @@ async function init() {
   }
 }
 
+// Parity note (signal-correctness audit): this video.js pipeline runs the
+// plausibility gate, smoothing, and hold-last-good continuity, but OMITS the
+// outlier-filter (MAX_JUMP) stage that app.js applies. No formula is
+// miscomputed; the two MediaPipe entry points just differ on outlier rejection.
 function detectPoses(poseLandmarker) {
   const startTime = performance.now();
   const timestamp = startTime / 1000;

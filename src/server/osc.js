@@ -116,7 +116,11 @@ export function buildOscMessage(pose, options = {}) {
 
     const lm = landmarks[i];
     if (lm) {
-      // MediaPipe gives normalized 0-1 coordinates
+      // Coordinate contract: MediaPipe gives normalized 0-1 coordinates, which
+      // is the convention for pose layers. (The MoveNet pose layer emits raw
+      // pixels on the same OSC address shape; the two are never mixed in one
+      // session, but any raw-pixel source must normalize before emit. See the
+      // signal-correctness audit, coordinate-contract note.)
       args.push({ type: "float", value: lm.y });
       args.push({ type: "float", value: lm.x });
       if (!legacyMode) {
