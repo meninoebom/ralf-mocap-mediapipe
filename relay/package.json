@@ -1,0 +1,9 @@
+{
+  "name": "ralf-mediapipe-test",
+  "version": "0.1.0",
+  "description": "Minimal MediaPipe → WebSocket test harness for Ralf adapter",
+  "scripts": {
+    "start": "bun server.ts",
+    "dev": "bun --watch server.ts"
+  }
+}

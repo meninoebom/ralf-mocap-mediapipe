@@ -72,3 +72,17 @@ Same format as MoveNet version:
 - Data: y, x pairs for each keypoint (normalized 0-1)
 
 **Note:** MediaPipe gives normalized coordinates (0-1), which is ideal for ML.
+
+## relay/ — the quality-path capture relay
+
+`relay/` is the small browser capture + WebSocket relay (port 3100) that feeds the *qualities* path: browser MediaPipe → relay → ralf-adapters → runtime. It was folded in from the retired ralf-mediapipe-test repo (July 2026) so both MediaPipe capture apps live in one place.
+
+Two capture stacks currently exist side by side:
+- **This app** (src/): standalone capture feeding gesture-studio on :6448
+- **relay/**: capture + relay feeding the adapters quality path on :3100
+
+Running both simultaneously means two MediaPipe inference stacks on one GPU — the known two-camera problem. The unification sketch (adapter forwards pose frames to :6448 behind an env flag, matching gesture-studio's 66/99-float layout) is documented in the July 2026 assessment; co-locating the two apps here is the staging ground for that work.
+
+```bash
+cd relay && bun install && bun run dev   # serves :3100
+```
